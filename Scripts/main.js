@@ -1,9 +1,17 @@
+let lastHeartbeat = 0;
+let lastFile = '';
+let cacheDebug = undefined;
+
+const githubDownloadPrefix = 'https://github.com/wakatime/wakatime-cli/releases/download';
+const githubReleasesStableUrl = 'https://api.github.com/repos/wakatime/wakatime-cli/releases/latest';
+const githubReleasesAlphaUrl = 'https://api.github.com/repos/wakatime/wakatime-cli/releases?per_page=1';
+
 exports.activate = function () {
   log.debug('Initializing version ' + nova.extension.version);
   checkCli(() => {
     checkApiKey(() => {
       setupEventListeners(() => {
-        log.debug('Finished initializing WakaTime extension.');
+        log.debug('Finished initializing WakaTime extension');
       });
     });
   });
@@ -49,7 +57,7 @@ function promptForApiKey(callback) {
     secure: false,
   };
   nova.workspace.showInputPanel('', options, val => {
-    if (isValidApiKey(val)) setSetting('settings', 'api_key', val);
+    if (isValidApiKey(val)) setSetting('settings', 'api_key', val, false);
     if (callback) callback();
   });
 }
@@ -68,16 +76,49 @@ function promptForDebugMode(callback) {
   });
 }
 
-const s3Prefix = 'https://wakatime-cli.s3-us-west-2.amazonaws.com/mac-x86-64/';
-
 function checkCli(callback) {
-  cliUpToDate(upToDate => {
-    if (upToDate) {
-      callback();
-    } else {
-      downloadCli(callback);
-    }
-  });
+  if (!isCliInstalled()) {
+    installCli(() => {
+      log.debug('Finished installing wakatime-cli');
+    });
+  } else {
+    isCliLatest((latest) => {
+      if (!latest) {
+        installCli(() => {
+          log.debug('Finished installing wakatime-cli');
+        });
+      }
+    });
+  }
+  
+  callback();
+}
+
+function isCliInstalled() {
+  return nova.fs.access(getCliLocation(), nova.fs.X_OK);
+}
+
+function getHomeDirectory() {
+  let home = nova.environment.WAKATIME_HOME;
+  if (home) {
+    let trimmed = home.trim();
+    let stats = nova.fs.stat(trimmed);
+    if (stats && stats.isDirectory()) return trimmed;
+  }
+
+  return nova.environment.HOME;
+}
+
+function getResourcesLocation() {
+  resourcesLocation = nova.path.join(getHomeDirectory(), '.wakatime');
+
+  if (!nova.fs.access(resourcesLocation, nova.fs.X_OK)) nova.fs.mkdir(resourcesLocation);
+  
+  return resourcesLocation;
+}
+
+function getCliLocation() {
+  return nova.path.join(getResourcesLocation(), 'wakatime-cli-darwin-amd64');
 }
 
 function checkApiKey(callback) {
@@ -88,14 +129,124 @@ function checkApiKey(callback) {
   }
 }
 
-function downloadCli(callback) {
-  const url = s3Prefix + 'wakatime-cli.zip';
+function installCli(callback) {
+  getLatestCliVersion(version => {
+    if (!version) {
+      callback();
+    }
+    const url = `${githubDownloadPrefix}/${version}/wakatime-cli-darwin-amd64.zip`;
+    downloadCli(url, () => {
+      callback();
+    });
+  });
+}
+
+function isCliLatest(callback) {
+  const options = { args: ['--version'] };
+
+  var process = new Process(getCliLocation(), options);
+  var stderr = [];
+  var stdout = [];
+
+  process.onStderr(function (line) {
+    stderr.push(line);
+  });
+  process.onStdout(function (line) {
+    stdout.push(line);
+  });
+  process.onDidExit(exitCode => {
+    if (stderr.length > 0) {
+      log.error('Failed to check local wakatime-cli version with error: ' + stderr.join('\n'));
+    }
+    const currentVersion = stdout.join('\n').trim();
+    log.debug(`Current wakatime-cli version is ${currentVersion}`);
+    log.debug('Checking for updates to wakatime-cli...');
+    
+    getLatestCliVersion((latestVersion) => {
+      if (currentVersion == latestVersion) {
+        log.debug('wakatime-cli is up to date');
+        callback(true);
+      } else {
+        if (latestVersion != null) {
+          log.debug('Found new wakatime-cli version: ' + latestVersion);  
+          callback(false);
+        } else {
+          log.debug('Unable to find latest wakatime-cli version');  
+          callback(true);
+        }
+      }  
+    });
+  });
+
+  process.start();
+}
+
+function getLatestCliVersion(callback) {
+  const proxy = getSetting('settings', 'proxy', false);
+  const noSSLVerify = getSetting('settings', 'no_sll_verify', false);
+  const modified = getSetting('internal', 'cli_version_last_modified', true);
+  const alpha = getSetting('settings', 'alpha', false);
+  
+  const url = alpha == 'true' ? githubReleasesAlphaUrl : githubReleasesStableUrl;
+  const opt = {
+    json: true,
+    headers: {
+      'User-Agent': 'github.com/wakatime/WakaTime.novaextension',
+    },
+  }
+  
+  if (proxy) opt['proxy'] = proxy;
+  if (noSSLVerify === 'true') opt['strictSSL'] = false;
+  if (modified) opt['headers']['If-Modified-Since'] = modified;
+  
+  fetch(url, opt)
+    .then(response => {
+      if (response.status == 200 || response.status == 304) {
+        log.debug(`GitHub API response ${response.status}`);
+        
+        if (response.status == 304) {
+          const version = getSetting('internal', 'cli_version', true);
+          callback(version);
+          return;
+        }
+        
+        const lastModified = response.headers['last-modified'];
+        if (lastModified) {
+          setSetting('internal', 'cli_version', latestCliVersion, true);
+          setSetting('internal', 'cli_version_last_modified', lastModified, true);
+        }
+        
+        return response.json()
+      } else {
+          log.warn(`GitHub API response ${response.status}`);
+      }
+      
+      callback('');
+    })
+    .then(json => {
+      if (!json) {
+        callback('');
+        return;
+      }
+  
+      latestCliVersion = alpha == 'true' ? json[0]['tag_name'] : json['tag_name'];
+      log.debug(`Latest wakatime-cli version from GitHub: ${latestCliVersion}`);
+      
+      callback(latestCliVersion);
+    })
+    .catch(error => {
+      log.error(error);
+      callback('');
+    });
+}
+
+function downloadCli(url, callback) {
   log.debug('Downloading wakatime-cli from ' + url);
-  if (!nova.fs.access(resourcesFolder(), nova.fs.X_OK)) nova.fs.mkdir(resourcesFolder());
+
   fetch(url)
     .then(response => response.arrayBuffer())
     .then(buffer => {
-      const folder = resourcesFolder();
+      const folder = getResourcesLocation();
       const zipFile = folder + '/wakatime-cli.zip';
       const zip = nova.fs.open(zipFile, 'wb');
       zip.write(buffer);
@@ -112,61 +263,28 @@ function downloadCli(callback) {
 }
 
 function unzip(zipFile, intoFolder, callback) {
-  const options = { args: [zipFile, '-d', intoFolder] };
+  log.debug('Extracting wakatime-cli.zip file...');
+  
+  const options = { args: ['-o', zipFile, '-d', intoFolder] };
   var process = new Process('/usr/bin/unzip', options);
   var stderr = [];
-  process.onStderr(function (line) {
-    stderr.push(line);
-  });
-  process.onDidExit(exitCode => {
-    if (stderr.length > 0) {
-      log.error('Failed to extract wakatime-cli.zip with error: ' + stderr.join('\n'));
-    }
-    callback();
-  });
-  process.start();
-}
-
-function cliExists() {
-  return nova.fs.access(cliPath(), nova.fs.X_OK);
-}
-
-function cliUpToDate(callback) {
-  if (!cliExists()) {
-    callback(false);
-    return;
-  }
-
-  const url = s3Prefix + 'current_version.txt';
-  fetch(url)
-    .then(response => response.text())
-    .then(latestVersion => {
-      const options = { args: ['--version'] };
-      var process = new Process(cliPath(), options);
-      var stderr = [];
-      var stdout = [];
-      process.onStderr(function (line) {
-        stderr.push(line);
-      });
-      process.onStdout(function (line) {
-        stdout.push(line);
-      });
-      process.onDidExit(exitCode => {
-        if (stderr.length > 0) {
-          log.error('Failed to check local wakatime-cli version with error: ' + stderr.join('\n'));
-        }
-        const localVersion = stdout.join('\n').trim();
-        if (localVersion != latestVersion) {
-          log.debug('Found new wakatime-cli version: ' + latestVersion);
-        }
-        callback(localVersion == latestVersion);
-      });
-      process.start();
-    })
-    .catch(error => {
-      log.error(error);
-      callback(true);
+  
+  try {
+    process.onStderr(function (line) {
+      stderr.push(line);
     });
+    process.onDidExit(exitCode => {
+      if (stderr.length > 0) {
+        log.error('Failed to extract wakatime-cli.zip with error: ' + stderr.join('\n'));
+      }
+      
+      callback();
+    });
+    
+    process.start();
+  } catch (e) {
+    log.error(e);
+  }
 }
 
 function hasApiKey() {
@@ -183,18 +301,10 @@ function isValidApiKey(key) {
   return true;
 }
 
-function resourcesFolder() {
-  return nova.path.expanduser('~/.wakatime');
-}
-
-function cliPath() {
-  return resourcesFolder() + '/wakatime-cli/wakatime-cli';
-}
-
-function getSetting(section, key) {
+function getSetting(section, key, internal) {
   let lines = [];
   try {
-    const config = nova.fs.open(getConfigFile(), 'r', 'utf-8');
+    const config = nova.fs.open(getConfigFile(internal), 'r', 'utf-8');
     lines = config.readlines();
     config.close();
   } catch (e) {
@@ -221,10 +331,10 @@ function getSetting(section, key) {
   return '';
 }
 
-function setSetting(section, key, val) {
+function setSetting(section, key, val, internal) {
   let lines = [];
   try {
-    const config = nova.fs.open(getConfigFile(), 'r', 'utf-8');
+    const config = nova.fs.open(getConfigFile(internal), 'r', 'utf-8');
     lines = config.readlines();
     config.close();
   } catch (e) {}
@@ -268,25 +378,26 @@ function setSetting(section, key, val) {
     contents.push(key + ' = ' + val);
   }
 
-  const out = nova.fs.open(getConfigFile(), 'wx', 'utf-8');
+  const out = nova.fs.open(getConfigFile(internal), 'wx', 'utf-8');
   out.write(contents.join('\n'));
   out.close();
 }
 
-function getConfigFile() {
-  return nova.path.expanduser('~/.wakatime.cfg');
+function getConfigFile(internal) {
+  if (internal) {
+    return nova.path.join(getHomeDirectory(), '.wakatime-internal.cfg');
+  }
+  return nova.path.join(getHomeDirectory(), '.wakatime.cfg');
 }
 
 function getApiKey() {
-  const key = getSetting('settings', 'api_key');
+  const key = getSetting('settings', 'api_key', false);
   if (isValidApiKey(key)) return key;
   return '';
 }
 
-let cacheDebug = undefined;
-
 function isDebugEnabled() {
-  if (cacheDebug === undefined) cacheDebug = getSetting('settings', 'debug') == 'true';
+  if (cacheDebug === undefined) cacheDebug = getSetting('settings', 'debug', false) == 'true';
   return cacheDebug;
 }
 
@@ -297,9 +408,6 @@ function startsWith(outer, inner) {
 function endsWith(outer, inner) {
   return inner === '' || outer.slice(-inner.length) === inner;
 }
-
-let lastHeartbeat = 0;
-let lastFile = '';
 
 function enoughTimePassed(time) {
   return lastHeartbeat + 120000 < time;
@@ -339,24 +447,31 @@ function getLocalFileIfRemote(doc) {
 
 function sendHeartbeat(file, isWrite, language, localFile) {
   const user_agent = 'nova/' + nova.versionString + ' nova-wakatime/' + nova.extension.version;
-  let args = ['--file', file.quote(), '--plugin', user_agent.quote()];
+  
+  let args = ['--entity', file.quote(), '--plugin', user_agent.quote()];
+  
   if (isWrite) args.push('--write');
+  
   if (language) {
     args.push('--language');
     args.push(language.quote());
   }
+  
   if (localFile) {
     args.push('--local-file');
     args.push(localFile.quote());
   }
-  const binary = cliPath();
+  
+  const binary = getCliLocation();
 
   log.debug('Sending heartbeat:\n' + formatArguments(binary, args));
 
   const options = { args: args };
+    
   var process = new Process(binary, options);
   var stderr = [];
   var stdout = [];
+  
   try {
     process.onStderr(function (line) {
       stderr.push(line);
@@ -365,7 +480,7 @@ function sendHeartbeat(file, isWrite, language, localFile) {
       stdout.push(line);
     });
   } catch (e) {
-    log.warn(e);
+    log.error(e);
   }
   process.onDidExit(exitCode => {
     if (exitCode == 0) {
@@ -376,13 +491,13 @@ function sendHeartbeat(file, isWrite, language, localFile) {
       if (stdout.length > 0) log.error(stdout.join('\n'));
       if (exitCode == 102) {
         log.debug(
-          'Offline (102); Working in offline mode. More details in your ~/.wakatime.cfg file.',
+          'WakaTime Offline, coding activity will sync when online',
         );
       } else if (exitCode == 103) {
-        log.error('Config parsing error (103); Check your ~/.wakatime.log file for more details.');
+        log.error('An error occured while parsing ~/.wakatime.cfg. Check ~/.wakatime.log for more info');
       } else if (exitCode == 104) {
         log.error(
-          'Invalid Api Key (104); Make sure your API Key matches https://wakatime.com/api-key.',
+          'Invalid API Key. Make sure your API Key is correct!',
         );
       } else {
         log.error(
@@ -392,8 +507,10 @@ function sendHeartbeat(file, isWrite, language, localFile) {
         );
       }
     }
+
     if (localFile) nova.fs.remove(localFile);
   });
+
   process.start();
 }
 
@@ -447,18 +564,18 @@ function formatDate(date) {
 }
 
 const log = {
-  info: function (msg) {
-    console.log('[WakaTime] [INFO] ' + msg);
-  },
   debug: function (msg) {
     if (!isDebugEnabled()) return;
     console.log('[WakaTime] [DEBUG] ' + msg);
   },
-  error: function (msg) {
-    console.error('[WakaTime] [ERROR] ' + msg);
+  info: function (msg) {
+    console.info('[WakaTime] [INFO] ' + msg);
   },
   warn: function (msg) {
     console.warn('[WakaTime] [WARN] ' + msg);
+  },
+  error: function (msg) {
+    console.error('[WakaTime] [ERROR] ' + msg);
   },
 };
 

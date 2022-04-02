@@ -1,3 +1,8 @@
+## Version 2.1.0 (Released 2022-04-02)
+
+Use Go wakatime-cli.
+[#13](https://github.com/wakatime/WakaTime.novaextension/issues/13)
+
 ## Version 2.0.3 (Released 2021-04-14)
 
 Bugfix catch and log error when attaching stdout/err listener to wakatime-cli child process.
