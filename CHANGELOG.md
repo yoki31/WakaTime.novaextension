@@ -1,3 +1,8 @@
+## Version 2.2.0 (Released 2022-04-05)
+
+Support Mac M1 ARM architecture.
+[#15](https://github.com/wakatime/WakaTime.novaextension/issues/15)
+
 ## Version 2.1.0 (Released 2022-04-02)
 
 Use Go wakatime-cli.
