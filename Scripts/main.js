@@ -502,7 +502,7 @@ function sendHeartbeat(file, isWrite, language, localFile) {
       } else {
         if (stderr.length > 0) log.error(stderr.join('\n'));
         if (stdout.length > 0) log.error(stdout.join('\n'));
-        if (exitCode == 102) {
+        if (exitCode == 102 || exitCode == 112) {
           log.debug(
             'WakaTime Offline, coding activity will sync when online',
           );
