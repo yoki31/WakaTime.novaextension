@@ -1,3 +1,7 @@
+## Version 2.2.1 (Released 2022-11-27)
+
+Support api key with waka prefix.
+
 ## Version 2.2.0 (Released 2022-04-05)
 
 Support Mac M1 ARM architecture.
