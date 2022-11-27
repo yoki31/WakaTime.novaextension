@@ -310,7 +310,7 @@ function hasApiKey() {
 function isValidApiKey(key) {
   if (!key) return false;
   const re = new RegExp(
-    '^[0-9A-F]{8}-[0-9A-F]{4}-4[0-9A-F]{3}-[89AB][0-9A-F]{3}-[0-9A-F]{12}$',
+    '^(waka_)?[0-9A-F]{8}-[0-9A-F]{4}-4[0-9A-F]{3}-[89AB][0-9A-F]{3}-[0-9A-F]{12}$',
     'i',
   );
   if (!re.test(key)) return false;
