@@ -1,3 +1,17 @@
+## Version 2.2.1 (Released 2022-11-27)
+
+Support api key with waka prefix.
+
+## Version 2.2.0 (Released 2022-04-05)
+
+Support Mac M1 ARM architecture.
+[#15](https://github.com/wakatime/WakaTime.novaextension/issues/15)
+
+## Version 2.1.0 (Released 2022-04-02)
+
+Use Go wakatime-cli.
+[#13](https://github.com/wakatime/WakaTime.novaextension/issues/13)
+
 ## Version 2.0.3 (Released 2021-04-14)
 
 Bugfix catch and log error when attaching stdout/err listener to wakatime-cli child process.
